@@ -35,6 +35,9 @@ namespace Steamless.NET
         /// <param name="args"></param>
         private static void Main(string[] args)
         {
+            // Override the assembly resolve event for this application..
+            AppDomain.CurrentDomain.AssemblyResolve += CurrentDomainOnAssemblyResolve;
+
             // Print the application header..
             PrintHeader();
 
@@ -79,6 +82,34 @@ namespace Steamless.NET
             Console.WriteLine();
             Console.WriteLine("Press any key to exit...");
             Console.ReadKey();
+        }
+
+        /// <summary>
+        /// Resolves embedded resources to not load from disk.
+        /// </summary>
+        /// <param name="sender"></param>
+        /// <param name="args"></param>
+        /// <returns></returns>
+        private static Assembly CurrentDomainOnAssemblyResolve(object sender, ResolveEventArgs args)
+        {
+            // Obtain the DLL name from the assembly..
+            var dllName = args.Name.Contains(",") ? args.Name.Substring(0, args.Name.IndexOf(",", StringComparison.InvariantCultureIgnoreCase)) : args.Name.Replace(".dll", "");
+            if (dllName.ToLower().EndsWith(".resources"))
+                return null;
+
+            // Build full path to the possible embedded resource..
+            var fullName = $"{Assembly.GetExecutingAssembly().EntryPoint.DeclaringType?.Namespace}.Embedded.{new AssemblyName(args.Name).Name}.dll";
+            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(fullName))
+            {
+                // Return null if we are not valid..
+                if (stream == null)
+                    return null;
+
+                // Read and load the embedded resource..
+                var data = new byte[stream.Length];
+                stream.Read(data, 0, (int)stream.Length);
+                return Assembly.Load(data);
+            }
         }
 
         /// <summary>

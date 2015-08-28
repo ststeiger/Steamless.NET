@@ -312,7 +312,7 @@ namespace Steamless.NET.Unpackers
                 // Write the dos header back to the file..
                 fStream.WriteBytes(Helpers.GetStructureBytes(this.File.DosHeader));
 
-                // Write the dos stub back to the file exists..
+                // Write the dos stub back to the file if it exists..
                 if (this.File.DosStubSize > 0)
                     fStream.WriteBytes(this.File.DosStubData);
 
@@ -353,7 +353,8 @@ namespace Steamless.NET.Unpackers
                         fStream.WriteBytes(this.TextSectionData ?? sectionData);
                     else
                         fStream.WriteBytes(sectionData);
-
+                    
+                    // Reset the file offset..
                     fStream.Position = sectionOffset;
                 }
 
@@ -372,7 +373,6 @@ namespace Steamless.NET.Unpackers
             }
             finally
             {
-                fStream?.Close();
                 fStream?.Dispose();
             }
         }
