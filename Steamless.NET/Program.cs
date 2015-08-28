@@ -45,38 +45,46 @@ namespace Steamless.NET
             Arguments = new List<string>();
             Arguments.AddRange(Environment.GetCommandLineArgs());
 
-            // Load the file and ensure it is valid..
-            var file = new Pe32File(args[0]);
-            if (!file.Parse() || file.IsFile64Bit() || !file.HasSection(".bind"))
-                return;
+            // Ensure a file was given..
+            if (args.Length == 0 || string.IsNullOrEmpty(args[0]))
+            {
+                PrintHelp();
+            }
+            else
+            {
+                // Load the file and ensure it is valid..
+                var file = new Pe32File(args[0]);
+                if (!file.Parse() || file.IsFile64Bit() || !file.HasSection(".bind"))
+                    return;
 
-            // Build a list of known unpackers within our local source..
-            var unpackers = (from t in Assembly.GetExecutingAssembly().GetTypes()
-                             from a in t.GetCustomAttributes(typeof(SteamStubUnpackerAttribute), false)
-                             select t).ToList();
+                // Build a list of known unpackers within our local source..
+                var unpackers = (from t in Assembly.GetExecutingAssembly().GetTypes()
+                                 from a in t.GetCustomAttributes(typeof(SteamStubUnpackerAttribute), false)
+                                 select t).ToList();
 
-            // Print out the known unpackers we found..
-            Output("Found the following unpackers (internal):", ConsoleOutputType.Info);
-            foreach (var attr in unpackers.Select(unpacker => (SteamStubUnpackerAttribute)unpacker.GetCustomAttributes(typeof(SteamStubUnpackerAttribute)).FirstOrDefault()))
-                Output($" >> Unpacker: {attr?.Name} - by: {attr?.Author}", ConsoleOutputType.Custom, ConsoleColor.Yellow);
-            Console.WriteLine();
+                // Print out the known unpackers we found..
+                Output("Found the following unpackers (internal):", ConsoleOutputType.Info);
+                foreach (var attr in unpackers.Select(unpacker => (SteamStubUnpackerAttribute)unpacker.GetCustomAttributes(typeof(SteamStubUnpackerAttribute)).FirstOrDefault()))
+                    Output($" >> Unpacker: {attr?.Name} - by: {attr?.Author}", ConsoleOutputType.Custom, ConsoleColor.Yellow);
+                Console.WriteLine();
 
-            // Process function to try and handle the file..
-            Func<bool> processed = () =>
-                {
+                // Process function to try and handle the file..
+                Func<bool> processed = () =>
+                    {
                     // Obtain the .bind section data..
                     var bindSectionData = file.GetSectionData(".bind");
 
                     // Attempt to process the file..
                     return (from unpacker in unpackers
-                            let attr = (SteamStubUnpackerAttribute)unpacker.GetCustomAttributes(typeof(SteamStubUnpackerAttribute)).FirstOrDefault()
-                            where attr != null
-                            where Helpers.FindPattern(bindSectionData, attr.Pattern) != 0
-                            select Activator.CreateInstance(unpacker) as SteamStubUnpacker).Select(stubUnpacker => stubUnpacker.Process(file)).FirstOrDefault();
-                };
+                                let attr = (SteamStubUnpackerAttribute)unpacker.GetCustomAttributes(typeof(SteamStubUnpackerAttribute)).FirstOrDefault()
+                                where attr != null
+                                where Helpers.FindPattern(bindSectionData, attr.Pattern) != 0
+                                select Activator.CreateInstance(unpacker) as SteamStubUnpacker).Select(stubUnpacker => stubUnpacker.Process(file)).FirstOrDefault();
+                    };
 
-            // Process the file..
-            processed();
+                // Process the file..
+                processed();
+            }
 
             // Pause the console so newbies can read the results..
             Console.WriteLine();
@@ -115,7 +123,7 @@ namespace Steamless.NET
         /// <summary>
         /// Prints the header of this application.
         /// </summary>
-        public static void PrintHeader()
+        private static void PrintHeader()
         {
             var color = Console.ForegroundColor;
 
@@ -133,6 +141,16 @@ namespace Steamless.NET
             Console.WriteLine("==================================================================\n");
 
             Console.ForegroundColor = color;
+        }
+
+        /// <summary>
+        /// Prints the help information on how to use this application.
+        /// </summary>
+        private static void PrintHelp()
+        {
+            Console.WriteLine($"{System.AppDomain.CurrentDomain.FriendlyName} [file] [options]\n");
+            Console.WriteLine("Options:");
+            Console.WriteLine("  --keepbind\t\tKeeps the .bind section inside of the unpacked file.");
         }
 
         /// <summary>
