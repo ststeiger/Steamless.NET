@@ -264,7 +264,7 @@ namespace Steamless.NET.Unpackers
                     return false;
 
                 // Set the override section data..
-                this.TextSectionData = textSectionData;
+                this.TextSectionData = data;
 
                 return true;
             }
