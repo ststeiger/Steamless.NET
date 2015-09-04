@@ -96,32 +96,50 @@ namespace Steamless.NET.Unpackers
             // Step #1 - Read the steam stub header.
             Program.Output("Info: Unpacker Stage #1", ConsoleOutputType.Custom, ConsoleColor.Magenta);
             if (!this.Step1())
+            {
+                Program.Output("Failed to read SteamStub header from file.", ConsoleOutputType.Error);
                 return false;
+            }
 
             // Step #2 - Read the payload.
             Program.Output("Info: Unpacker Stage #2", ConsoleOutputType.Custom, ConsoleColor.Magenta);
             if (!this.Step2())
+            {
+                Program.Output("Failed to read payload from file.", ConsoleOutputType.Error);
                 return false;
+            }
 
             // Step #3 - Read the SteamDRMP.dll file.
             Program.Output("Info: Unpacker Stage #3", ConsoleOutputType.Custom, ConsoleColor.Magenta);
             if (!this.Step3())
+            {
+                Program.Output("Failed to read/dump SteamDRMP.dll from file.", ConsoleOutputType.Error);
                 return false;
+            }
 
             // Step #4 - Find needed offsets within the SteamDRMP.dll file..
             Program.Output("Info: Unpacker Stage #4", ConsoleOutputType.Custom, ConsoleColor.Magenta);
             if (!this.Step4())
+            {
+                Program.Output("Failed to obtain needed offsets from within SteamDRMP.dll.", ConsoleOutputType.Error);
                 return false;
+            }
 
-            // Step #5 - Read the .text section.
+            // Step #5 - Read the code section.
             Program.Output("Info: Unpacker Stage #5", ConsoleOutputType.Custom, ConsoleColor.Magenta);
             if (!this.Step5())
+            {
+                Program.Output("Failed to handle the code section of the file.", ConsoleOutputType.Error);
                 return false;
+            }
 
             // Step #6 - Save the file.
             Program.Output("Info: Unpacker Stage #6", ConsoleOutputType.Custom, ConsoleColor.Magenta);
             if (!this.Step6())
+            {
+                Program.Output("Failed to save unpacked file to disk.", ConsoleOutputType.Error);
                 return false;
+            }
 
             Program.Output("Processed the file successfully!", ConsoleOutputType.Success);
 
@@ -253,46 +271,49 @@ namespace Steamless.NET.Unpackers
         /// <summary>
         /// Step #5
         /// 
-        /// Read, decode, and process the text section.
+        /// Read, decode, and process the main code section.
         /// </summary>
         /// <returns></returns>
         private bool Step5()
         {
-            // Obtain the .text section from the file..
-            byte[] textSectionData;
-            var textSection = this.File.GetSection(".text");
-            if (textSection.SectionName != ".text")
+            byte[] codeSectionData;
+
+            // Obtain the main code section (typically .text)..
+            var mainSection = this.File.GetOwnerSection(this.File.GetRvaFromVa(BitConverter.ToUInt32(this.PayloadData.Skip(this.SteamDrmpOffsets[3]).Take(4).ToArray(), 0)));
+            if (mainSection.PointerToRawData == 0 || mainSection.SizeOfRawData == 0)
                 return false;
 
-            // Determine if we are using encryption on the .text section..
+            // Save the code section for later use..
+            this.CodeSection = mainSection;
+
+            // Determine if we are using encryption on the section..
             var flags = BitConverter.ToUInt32(this.PayloadData.Skip(this.SteamDrmpOffsets[0]).Take(4).ToArray(), 0);
             if ((flags & (uint)DrmFlags.NoEncryption) == (uint)DrmFlags.NoEncryption)
             {
-                // No encryption was used, just read the original data and restore the stolen bytes..
-                var txtSectionData = new byte[textSection.SizeOfRawData];
-                Array.Copy(this.File.FileData, this.File.GetFileOffsetFromRva(textSection.VirtualAddress), txtSectionData, 0, textSection.SizeOfRawData);
-                textSectionData = txtSectionData;
+                // No encryption was used, just read the original data..
+                codeSectionData = new byte[mainSection.SizeOfRawData];
+                Array.Copy(this.File.FileData, this.File.GetFileOffsetFromRva(mainSection.VirtualAddress), codeSectionData, 0, mainSection.SizeOfRawData);
             }
             else
             {
                 // Encryption was used, obtain the encryption information..
                 var aesKey = this.PayloadData.Skip(this.SteamDrmpOffsets[5]).Take(32).ToArray();
                 var aesIv = this.PayloadData.Skip(this.SteamDrmpOffsets[6]).Take(16).ToArray();
-                var textStolen = this.PayloadData.Skip(this.SteamDrmpOffsets[7]).Take(16).ToArray();
+                var codeStolen = this.PayloadData.Skip(this.SteamDrmpOffsets[7]).Take(16).ToArray();
 
-                // Restore the stolen data then read the rest of the .text section..
-                var txtSectionData = new byte[textSection.SizeOfRawData + textStolen.Length];
-                Array.Copy(textStolen, 0, txtSectionData, 0, textStolen.Length);
-                Array.Copy(this.File.FileData, this.File.GetFileOffsetFromRva(textSection.VirtualAddress), txtSectionData, textStolen.Length, textSection.SizeOfRawData);
+                // Restore the stolen data then read the rest of the section data..
+                codeSectionData = new byte[mainSection.SizeOfRawData + codeStolen.Length];
+                Array.Copy(codeStolen, 0, codeSectionData, 0, codeStolen.Length);
+                Array.Copy(this.File.FileData, this.File.GetFileOffsetFromRva(mainSection.VirtualAddress), codeSectionData, codeStolen.Length, mainSection.SizeOfRawData);
 
-                // Decrypt the .text section..
+                // Decrypt the code section..
                 var aes = new AesHelper(aesKey, aesIv);
                 aes.RebuildIv(aesIv);
-                textSectionData = aes.Decrypt(txtSectionData, CipherMode.CBC, PaddingMode.None);
+                codeSectionData = aes.Decrypt(codeSectionData, CipherMode.CBC, PaddingMode.None);
             }
 
-            // Store the text section data..
-            this.TextSectionData = textSectionData;
+            // Store the section data..
+            this.CodeSectionData = codeSectionData;
 
             return true;
         }
@@ -372,9 +393,9 @@ namespace Steamless.NET.Unpackers
                     var sectionOffset = fStream.Position;
                     fStream.Position = s.PointerToRawData;
 
-                    // Determine if we should handle the text section differently..
-                    if (string.Compare(s.SectionName, ".text", StringComparison.InvariantCultureIgnoreCase) == 0)
-                        fStream.WriteBytes(this.TextSectionData ?? sectionData);
+                    // Determine if this is the code section..
+                    if (s.SizeOfRawData == this.CodeSection.SizeOfRawData && s.PointerToRawData == this.CodeSection.PointerToRawData)
+                        fStream.WriteBytes(this.CodeSectionData ?? sectionData);
                     else
                         fStream.WriteBytes(sectionData);
 
@@ -621,8 +642,13 @@ namespace Steamless.NET.Unpackers
         public List<int> SteamDrmpOffsets { get; set; }
 
         /// <summary>
+        /// Gets or sets the code section.
+        /// </summary>
+        public Structures.ImageSectionHeader CodeSection { get; set; }
+
+        /// <summary>
         /// Gets or sets the text section data.
         /// </summary>
-        public byte[] TextSectionData { get; set; }
+        public byte[] CodeSectionData { get; set; }
     }
 }

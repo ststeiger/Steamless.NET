@@ -71,11 +71,11 @@ namespace Steamless.NET
                 // Process function to try and handle the file..
                 Func<bool> processed = () =>
                     {
-                    // Obtain the .bind section data..
-                    var bindSectionData = file.GetSectionData(".bind");
+                        // Obtain the .bind section data..
+                        var bindSectionData = file.GetSectionData(".bind");
 
-                    // Attempt to process the file..
-                    return (from unpacker in unpackers
+                        // Attempt to process the file..
+                        return (from unpacker in unpackers
                                 let attr = (SteamStubUnpackerAttribute)unpacker.GetCustomAttributes(typeof(SteamStubUnpackerAttribute)).FirstOrDefault()
                                 where attr != null
                                 where Helpers.FindPattern(bindSectionData, attr.Pattern) != 0
@@ -83,7 +83,11 @@ namespace Steamless.NET
                     };
 
                 // Process the file..
-                processed();
+                if (!processed())
+                {
+                    Console.WriteLine();
+                    Output("Failed to process file.", ConsoleOutputType.Error);
+                }
             }
 
             // Pause the console so newbies can read the results..
