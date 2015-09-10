@@ -21,6 +21,7 @@ namespace Steamless.NET.Unpackers
     using Classes;
     using Extensions;
     using System;
+    using System.Collections.Generic;
     using System.IO;
     using System.Linq;
     using System.Runtime.InteropServices;
@@ -127,7 +128,7 @@ namespace Steamless.NET.Unpackers
             if (!this.Step3())
                 return false;
 
-            // Step #4 - Read the .text section.
+            // Step #4 - Read the code section.
             Program.Output("Info: Unpacker Stage #4", ConsoleOutputType.Custom, ConsoleColor.Magenta);
             if (!this.Step4())
                 return false;
@@ -150,19 +151,39 @@ namespace Steamless.NET.Unpackers
         /// <returns></returns>
         private bool Step1()
         {
-            // Obtain the entry point file offset..
-            var fileOffset = this.File.GetFileOffsetFromRva(this.File.NtHeaders.OptionalHeader.AddressOfEntryPoint);
+            // List of stub sizes..
+            var stubSizeList = new List<int>
+                {
+                    // Default v3 Stub Size (Based on structure above.)
+                    Marshal.SizeOf(typeof(SteamStub32Var3Header)),
 
-            // Read the raw header data from the file data..
-            var headerData = new byte[Marshal.SizeOf(typeof(SteamStub32Var3Header))];
-            Array.Copy(this.File.FileData, (int)(fileOffset - (uint)Marshal.SizeOf(typeof(SteamStub32Var3Header))), headerData, 0, Marshal.SizeOf(typeof(SteamStub32Var3Header)));
+                    // Variant of v3 stub with a slightly smaller size.
+                    // Known Uses of This Size:
+                    //      --> The Wolf Amoung Us
+                    0xB0
+                };
 
-            // Decode and obtain the steam stub header..
-            this.XorKey = SteamXor(ref headerData, (uint)Marshal.SizeOf(typeof(SteamStub32Var3Header)));
-            this.StubHeader = Helpers.GetStructure<SteamStub32Var3Header>(headerData);
+            // Loop each stub size and attempt to unpack the stub header..
+            foreach (var stubSize in stubSizeList)
+            {
+                // Obtain the entry point file offset..
+                var fileOffset = this.File.GetFileOffsetFromRva(this.File.NtHeaders.OptionalHeader.AddressOfEntryPoint);
 
-            // Validate the header signature..
-            return this.StubHeader.Signature == 0xC0DEC0DE;
+                // Read the raw header data from the file data..
+                var headerData = new byte[Marshal.SizeOf(typeof(SteamStub32Var3Header))];
+                Array.Copy(this.File.FileData, (int)(fileOffset - stubSize), headerData, 0, Marshal.SizeOf(typeof(SteamStub32Var3Header)));
+
+                // Decode and obtain the steam stub header..
+                this.XorKey = SteamXor(ref headerData, (uint)Marshal.SizeOf(typeof(SteamStub32Var3Header)));
+                this.StubHeader = Helpers.GetStructure<SteamStub32Var3Header>(headerData);
+
+                // Validate the header signature..
+                if (this.StubHeader.Signature == 0xC0DEC0DE)
+                    return true;
+            }
+
+            // If we got here, we failed to unpack the header and cannot continue..
+            return false;
         }
 
         /// <summary>
@@ -233,7 +254,7 @@ namespace Steamless.NET.Unpackers
         /// <summary>
         /// Step #4
         /// 
-        /// Read, decode, and process the text section.
+        /// Read, decode, and process the code section.
         /// </summary>
         /// <returns></returns>
         private bool Step4()
@@ -242,19 +263,20 @@ namespace Steamless.NET.Unpackers
             if ((this.StubHeader.Flags & (uint)DrmFlags.NoEncryption) == (uint)DrmFlags.NoEncryption)
                 return true;
 
-            // Ensure the .text section exists..
-            if (!this.File.HasSection(".text"))
+            // Obtain the main code section that is encrypted..
+            var mainSection = this.File.GetOwnerSection(this.StubHeader.TextSectionVirtualAddress);
+            if (mainSection.PointerToRawData == 0 || mainSection.SizeOfRawData == 0)
                 return false;
 
-            // Obtain the .text section..
-            var textSection = this.File.GetSection(".text");
+            // Save the code section for later use..
+            this.CodeSection = mainSection;
 
             try
             {
                 // Obtain the .text section data..
-                var textSectionData = new byte[textSection.SizeOfRawData + this.StubHeader.TextSectionStolenData.Length];
+                var textSectionData = new byte[mainSection.SizeOfRawData + this.StubHeader.TextSectionStolenData.Length];
                 Array.Copy(this.StubHeader.TextSectionStolenData, 0, textSectionData, 0, this.StubHeader.TextSectionStolenData.Length);
-                Array.Copy(this.File.FileData, this.File.GetFileOffsetFromRva(textSection.VirtualAddress), textSectionData, this.StubHeader.TextSectionStolenData.Length, textSection.SizeOfRawData);
+                Array.Copy(this.File.FileData, this.File.GetFileOffsetFromRva(mainSection.VirtualAddress), textSectionData, this.StubHeader.TextSectionStolenData.Length, mainSection.SizeOfRawData);
 
                 // Create the AES decryption class..
                 var aes = new AesHelper(this.StubHeader.AES_Key, this.StubHeader.AES_IV);
@@ -264,7 +286,7 @@ namespace Steamless.NET.Unpackers
                     return false;
 
                 // Set the override section data..
-                this.TextSectionData = data;
+                this.CodeSectionData = data;
 
                 return true;
             }
@@ -348,9 +370,9 @@ namespace Steamless.NET.Unpackers
                     var sectionOffset = fStream.Position;
                     fStream.Position = s.PointerToRawData;
 
-                    // Determine if we should handle the text section differently..
-                    if (string.Compare(s.SectionName, ".text", StringComparison.InvariantCultureIgnoreCase) == 0)
-                        fStream.WriteBytes(this.TextSectionData ?? sectionData);
+                    // Determine if this is the code section..
+                    if (s.SizeOfRawData == this.CodeSection.SizeOfRawData && s.PointerToRawData == this.CodeSection.PointerToRawData)
+                        fStream.WriteBytes(this.CodeSectionData ?? sectionData);
                     else
                         fStream.WriteBytes(sectionData);
                     
@@ -483,8 +505,13 @@ namespace Steamless.NET.Unpackers
         public SteamStub32Var3Header StubHeader { get; set; }
 
         /// <summary>
-        /// Gets or sets the text section data.
+        /// Gets or sets the code section.
         /// </summary>
-        public byte[] TextSectionData { get; set; }
+        public Structures.ImageSectionHeader CodeSection { get; set; }
+
+        /// <summary>
+        /// Gets or sets the code section data.
+        /// </summary>
+        public byte[] CodeSectionData { get; set; }
     }
 }
