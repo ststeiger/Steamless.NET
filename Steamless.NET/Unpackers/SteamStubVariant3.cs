@@ -279,7 +279,7 @@ namespace Steamless.NET.Unpackers
                 Array.Copy(this.File.FileData, this.File.GetFileOffsetFromRva(mainSection.VirtualAddress), textSectionData, this.StubHeader.TextSectionStolenData.Length, mainSection.SizeOfRawData);
 
                 // Create the AES decryption class..
-                var aes = new AesHelper(this.StubHeader.AES_Key, this.StubHeader.AES_IV);
+                var aes = new AesHelper(this.StubHeader.AES_Key, this.StubHeader.AES_IV, CipherMode.ECB, PaddingMode.PKCS7);
                 aes.RebuildIv(this.StubHeader.AES_IV);
                 var data = aes.Decrypt(textSectionData, CipherMode.CBC, PaddingMode.None);
                 if (data == null)
@@ -375,7 +375,7 @@ namespace Steamless.NET.Unpackers
                         fStream.WriteBytes(this.CodeSectionData ?? sectionData);
                     else
                         fStream.WriteBytes(sectionData);
-                    
+
                     // Reset the file offset..
                     fStream.Position = sectionOffset;
                 }
